@@ -36,7 +36,7 @@ ray_hit_any :: proc(ray: Ray) -> (hit_idx: int, ray_hit: RayHit) {
 
 ray_color :: proc(ray: Ray, iter: i32) -> Vec3 {
     if iter > 5 {
-        return Vec3Zero
+        return Vec3One
     }
     hit_idx, ray_hit := ray_hit_any(ray)
 
@@ -71,14 +71,22 @@ window_props := Window{
     name = "Raytracing",
     size = window_size,
     size_f = { f32(window_size.x), f32(window_size.y) },
-    fps = 30,
+    fps = 60,
 }
 
-@(export)
+main :: proc() {
+    game_init()
+    for game_update() {
+        continue
+    }
+    game_shutdown()
+}
+
+// @(export)
 game_init :: proc() {
     state = new(State)
     state.window = window_props
-    state.request_rerender = true
+    state.request_rerender = false // should be false on first render - thread are starting from clean/ready to render state
 
     rl.SetConfigFlags(state.window.config_flags)
     rl.InitWindow(window_size.x, window_size.y, state.window.name)
@@ -95,9 +103,12 @@ game_init :: proc() {
     generate_rand_unit_vectors_2d(state.unit_vec2_cache[:])
 
     init()
+    camera_update(&state.cam)
 
-    thread_count := os.processor_core_count()-2
-    sync.barrier_init(&state.rerender_barrier, thread_count+1)
+    thread_count := os.processor_core_count()*2
+    sync.barrier_init(&state.rerender_clean_end, thread_count+1)
+    sync.barrier_init(&state.rerender_clean_start, thread_count+1)
+    sync.barrier_init(&state.rerender_signal, thread_count+1)
 
     pixels_per_thread := i32(len(state.normalized_buffer) / thread_count)
     state.threads = make([dynamic]^thread.Thread, 0, thread_count)
@@ -111,6 +122,7 @@ game_init :: proc() {
             begin = i * pixels_per_thread,
             end = i * pixels_per_thread + pixels_per_thread,
             samples_count_left = SAMPLES_PER_PIXEL,
+            cam = state.cam,
         })
         t.data = &state.threads_data[i]
 
@@ -124,7 +136,7 @@ init :: proc() {
     rl.SetTargetFPS(state.window.fps)
 
     state.cam.vFov = 90
-    state.cam.defocus_angle = 3.0
+    state.cam.defocus_angle = 0.0
     state.cam.focus_dist = 2.5
     // state.cam.defocus_angle = 0.0
 
@@ -136,6 +148,10 @@ init :: proc() {
     state.texture_buffer    = make([dynamic]rl.Color, image_size.x * image_size.y)
     state.screen_tex = rl.LoadRenderTexture(image_size.x, image_size.y)
     state.rt_tex     = rl.LoadRenderTexture(image_size.x, image_size.y)
+    for i in 0..<len(state.normalized_buffer) {
+        state.normalized_buffer[i] = Vec3Zero
+    }
+
 
     brightness :: proc(col: Vec3, factor: f64) -> Vec3 {
         return {
@@ -154,78 +170,81 @@ init :: proc() {
     mat_right  := Material{ {0.8, 0.6, 0.2}, 0.2, 0.0, .Metal }
     mat_light  := Material{ {1.0, 0.6, 0.2}, 0.0, 0.0, .DiffuseLight }
 
-    tree_mat := Material{ {0.25, 0.41, 0.04}, 0.9, 0.0, .Metal }
-    green_bulb_mat := Material{ brightness({0.25, 0.41, 0.04}, 0.15), 0.0, 2.5, .Dielectric }
-    red_bulb_mat := Material{ {0.8, 0.1, 0.04}, 0.3, 0.0, .Metal }
-    blue_bulb_mat := Material{ {0.1, 0.3, 0.8}, 0.3, 0.0, .Metal }
-
     clear(&state.hit_list)
     append(&state.hit_list, new_sphere({0, -100.5, -1}, 100.5, mat_ground))
 
-    count_max := f64(14)
-    count := count_max
-    height := f64(15)
-    for h in 0..<height {
+    christmas_tree_entities :: proc() {
+        tree_mat := Material{ {0.25, 0.41, 0.04}, 0.9, 0.0, .Metal }
+        green_bulb_mat := Material{ brightness({0.25, 0.41, 0.04}, 0.15), 0.0, 2.5, .Dielectric }
+        red_bulb_mat := Material{ {0.8, 0.1, 0.04}, 0.3, 0.0, .Metal }
+        blue_bulb_mat := Material{ {0.1, 0.3, 0.8}, 0.3, 0.0, .Metal }
+        mat_right  := Material{ {0.8, 0.6, 0.2}, 0.2, 0.0, .Metal }
 
-        t := h / height
-        count -= t*2
+        count_max := f64(14)
+        count := count_max
+        height := f64(15)
+        for h in 0..<height {
 
-        for i in 0..<count+1 {
-            i := f64(i)
-            x := math.cos(math.PI * (i / count)) * (1.0 - t)
-            z := math.sin(math.PI * (i / count)) * (1.0 - t)
-            y := (h)*0.2
+            t := h / height
+            count -= t*2
 
-            x += rand.float64_range(-0.05, 0.05)
-            z += rand.float64_range(-0.05, 0.05)
-            size := rand.float64_range(0.13, 0.17)
-            append(&state.hit_list, new_sphere({ x, y, z }, size, tree_mat))
-        }
-    }
+            for i in 0..<count+1 {
+                i := f64(i)
+                x := math.cos(math.PI * (i / count)) * (1.0 - t)
+                z := math.sin(math.PI * (i / count)) * (1.0 - t)
+                y := (h)*0.2
 
-    count = 6
-    height = f64(5)
-    mat_idx := 0
-    for h in 0..<height {
-
-        t := (h) / height
-        count -= t*2.2
-
-        for i in 0..<count+1 {
-            i := f64(i)
-            x := math.cos(math.PI * (i / count)) * (1.0 - t) * 1.2
-            z := math.sin(math.PI * (i / count)) * (1.0 - t) * 1.2
-            y := h * 0.58
-
-            x += rand.float64_range(-0.04, 0.04)
-            z += rand.float64_range(-0.04, 0.04)
-            y += rand.float64_range(-0.1, 0.1)
-            size := rand.float64_range(0.15, 0.18)
-            mats := []Material{ green_bulb_mat, red_bulb_mat, blue_bulb_mat, mat_right }
-            mat := mats[mat_idx%len(mats)]
-            if mat != green_bulb_mat {
-                mat.fuzz = rand.float64_range(0.0, 0.3)
+                x += rand.float64_range(-0.05, 0.05)
+                z += rand.float64_range(-0.05, 0.05)
+                size := rand.float64_range(0.13, 0.17)
+                append(&state.hit_list, new_sphere({ x, y, z }, size, tree_mat))
             }
-            append(&state.hit_list, new_sphere({ x, y+0.2, z }, size, mat))
-            mat_idx += 1
         }
-    }
-    append(&state.hit_list, new_sphere({ 0, 2.9, 0 }, 0.23, mat_right))
 
-    // append(&state.hit_list, new_sphere({ 0.0,  0.0, -1.2}, 0.5, mat_center))
+        count = 6
+        height = f64(5)
+        mat_idx := 0
+        for h in 0..<height {
+
+            t := (h) / height
+            count -= t*2.2
+
+            for i in 0..<count+1 {
+                i := f64(i)
+                x := math.cos(math.PI * (i / count)) * (1.0 - t) * 1.2
+                z := math.sin(math.PI * (i / count)) * (1.0 - t) * 1.2
+                y := h * 0.58
+
+                x += rand.float64_range(-0.04, 0.04)
+                z += rand.float64_range(-0.04, 0.04)
+                y += rand.float64_range(-0.1, 0.1)
+                size := rand.float64_range(0.15, 0.18)
+                mats := []Material{ green_bulb_mat, red_bulb_mat, blue_bulb_mat, mat_right }
+                mat := mats[mat_idx%len(mats)]
+                if mat != green_bulb_mat {
+                    mat.fuzz = rand.float64_range(0.0, 0.3)
+                }
+                append(&state.hit_list, new_sphere({ x, y+0.2, z }, size, mat))
+                mat_idx += 1
+            }
+        }
+        append(&state.hit_list, new_sphere({ 0, 2.9, 0 }, 0.23, mat_right))
+    }
+
+    append(&state.hit_list, new_sphere({ 0.0,  0.5, -1.2}, 0.5, mat_center))
     // append(&state.hit_list, new_sphere({-1.0,  0.0, -1.0}, 0.5, mat_left))
     // append(&state.hit_list, new_sphere({ 1.0,  0.0, -1.0}, 0.5, mat_right))
     // append(&state.hit_list, new_sphere({ 1.0,  0.0, -1.0}, 0.5, mat_light))
     // append(&state.hit_list, new_bbox({-0.6, -0.45, -0.5}, {-0.2, 0, -1}))
 }
 
-@(export)
+// @(export)
 game_hot_reloaded :: proc(memFromOldApi: ^State) {
     state = memFromOldApi
     init()
 }
 
-@(export)
+// @(export)
 game_update :: proc() -> bool {
     state.request_rerender = state.request_rerender || camera_controls() || rl.IsKeyPressed(.R)
 
@@ -233,7 +252,7 @@ game_update :: proc() -> bool {
         if false {
             focus_point := rl.GetMousePosition() * image_scale
             // focus_point := image_size / 2
-            ray := get_straight_ray_from_camera(f64(focus_point.x), f64(focus_point.y))
+            ray := get_straight_ray_from_camera(state.cam, f64(focus_point.x), f64(focus_point.y))
             hit_idx, ray_hit := ray_hit_any(ray)
             if hit_idx != -1 {
                 state.cam.focus_dist = lg.length(state.cam.position - ray_hit.p) * 1.2
@@ -244,13 +263,35 @@ game_update :: proc() -> bool {
 
     camera_update(&state.cam)
 
+    @(static) render_time: f32 = 0.0
     if state.request_rerender {
-        // Notify threads to stop and reset their state and buffer region in order to rerender
-        sync.barrier_wait(&state.rerender_barrier)
-        state.request_rerender = false
+        render_time = 0.0
+    }
+    finished_threads_count := 0
+    for d, idx in state.threads_data {
+        if d.samples_count_left <= 0 {
+            finished_threads_count += 1
+        }
+    }
+    if finished_threads_count != len(state.threads_data) {
+        render_time += rl.GetFrameTime()
     }
 
-    rl.UpdateTexture(state.rt_tex.texture, raw_data(state.texture_buffer))
+    if state.request_rerender {
+        // Notify threads to stop and reset their state and buffer region in order to rerender
+        for &tData in state.threads_data {
+            tData.cam = state.cam
+        }
+        _ = sync.atomic_add(&state.rerender_gen, 1)
+        sync.barrier_wait(&state.rerender_clean_start)
+        sync.barrier_wait(&state.rerender_clean_end)
+        rl.UpdateTexture(state.rt_tex.texture, raw_data(state.texture_buffer))
+        sync.barrier_wait(&state.rerender_signal)
+        state.request_rerender = false
+    } else {
+        rl.UpdateTexture(state.rt_tex.texture, raw_data(state.texture_buffer))
+    }
+
 
     // Technically we can just draw state.rt_tex texture straigh to the screen,
     // But maybe later this can be used for something interesting
@@ -268,9 +309,7 @@ game_update :: proc() -> bool {
         // rerender = GuiSlider_Custom({window_props.size_f.x-150, 0, 150, 25}, "Text", "", &val_f32, 0.0, 30.0)
         // state.cam.defocus_angle = f64(val_f32)
 
-        // for d, idx in state.threads_data {
-        //     debug_textf("thread %i: %i", idx, d.samples_count_left)
-        // }
+        debug_text("Current render time: ", render_time)
 
         debug_text_draw_queued_and_reset()
 
@@ -287,25 +326,37 @@ game_update :: proc() -> bool {
 
 render_pass_threaded :: proc(t: ^thread.Thread) {
     data := (^ThreadData)(t.data)
+    local_rerender_gen := sync.atomic_load(&state.rerender_gen)
+
     for true {
-        if state.request_rerender {
+        rerender_gen := sync.atomic_load(&state.rerender_gen)
+        if local_rerender_gen != rerender_gen {
+            sync.barrier_wait(&state.rerender_clean_start)
+            local_rerender_gen = rerender_gen
+            data = (^ThreadData)(t.data)
             for i in data.begin..<data.end {
                 state.normalized_buffer[i] = Vec3Zero
             }
-            sync.barrier_wait(&state.rerender_barrier)
+
             data.samples_count_left = SAMPLES_PER_PIXEL
+            // Do one pass and let main thread to render to screen to avoid tearing
+            render_pass(data.begin, data.end, data.samples_count_left, data.cam)
+            data.samples_count_left -= 1
+            sync.barrier_wait(&state.rerender_clean_end)
+            sync.barrier_wait(&state.rerender_signal)
+
         }
 
         if data.samples_count_left > 0 {
-            render_pass(data.begin, data.end, data.samples_count_left)
+            render_pass(data.begin, data.end, data.samples_count_left, data.cam)
             data.samples_count_left -= 1
         } else {
-            time.sleep(time.Second / 2)
+            time.sleep(time.Millisecond * 5)
         }
     }
 }
 
-render_pass :: proc(begin, end, samples_count_left: i32) {
+render_pass :: proc(begin, end, samples_count_left: i32, cam: Camera) {
     for i in begin..<end {
         i := i32(i)
         x := f64(i % image_size.x)
@@ -313,10 +364,10 @@ render_pass :: proc(begin, end, samples_count_left: i32) {
 
         ray: Ray
         when SAMPLES_PER_PIXEL == 1 {
-            ray = get_straight_ray_from_camera(x, y)
+            ray = get_straight_ray_from_camera(cam, x, y)
             state.normalized_buffer[i] = ray_color(ray, 0)
         } else {
-            ray = get_ray_from_camera(x, y)
+            ray = get_ray_from_camera(cam, x, y)
             state.normalized_buffer[i] += ray_color(ray, 0)
         }
     }
@@ -334,7 +385,7 @@ render_pass :: proc(begin, end, samples_count_left: i32) {
     }
 }
 
-@(export)
+// @(export)
 game_shutdown :: proc() {
     for t in state.threads {
         thread.terminate(t, 0)
@@ -352,7 +403,7 @@ game_shutdown :: proc() {
     free(state)
 }
 
-@(export)
+// @(export)
 game_memory :: proc() -> rawptr {
     return state
 }

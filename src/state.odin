@@ -14,7 +14,11 @@ State :: struct {
     cam                     : Camera,
 
     request_rerender        : bool,
-    rerender_barrier        : sync.Barrier,
+    rerender_gen            : i32,
+    rerender_clean_start    : sync.Barrier,
+    rerender_clean_end      : sync.Barrier,
+    rerender_signal         : sync.Barrier,
+
     hit_list                : [dynamic]Hittable,
 
     threads                 : [dynamic]^thread.Thread,
@@ -38,4 +42,5 @@ ThreadData :: struct {
     begin: i32,
     end: i32,
     samples_count_left: i32,
+    cam: Camera,
 }

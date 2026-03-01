@@ -1,3 +1,4 @@
+#+feature using-stmt
 package raytracing
 
 import "core:math"
@@ -40,30 +41,28 @@ new_camera :: proc() -> (cam: Camera) {
     return
 }
 
-get_ray_from_camera :: proc(x, y: f64) -> (ray: Ray) {
-    using state.cam
+get_ray_from_camera :: proc(cam: Camera, x, y: f64) -> (ray: Ray) {
     offset_x := rand.float64_range(-0.5, 0.5)
     offset_y := rand.float64_range(-0.5, 0.5)
-    pixel_sample := pixel_00_loc +
-        ((x + offset_x) * pixel_delta_u) +
-        ((y + offset_y) * pixel_delta_v)
+    pixel_sample := cam.pixel_00_loc +
+        ((x + offset_x) * cam.pixel_delta_u) +
+        ((y + offset_y) * cam.pixel_delta_v)
 
-    if defocus_angle <= 0 {
-        ray.orig = position
+    if cam.defocus_angle <= 0 {
+        ray.orig = cam.position
     } else {
         // defocus disk sample
         p := vec3_rand_in_unit_disk()
-        ray.orig = position + (p.x * defocus_disk_u) + (p.y * defocus_disk_v)
+        ray.orig = cam.position + (p.x * cam.defocus_disk_u) + (p.y * cam.defocus_disk_v)
     }
     ray.dir = pixel_sample - ray.orig
     return
 }
 
-get_straight_ray_from_camera :: proc "contextless" (x, y: f64) -> (ray: Ray) {
-    using state.cam
-    pixel_sample := pixel_00_loc + (x * pixel_delta_u) + (y * pixel_delta_v)
+get_straight_ray_from_camera :: proc "contextless" (cam: Camera, x, y: f64) -> (ray: Ray) {
+    pixel_sample := cam.pixel_00_loc + (x * cam.pixel_delta_u) + (y * cam.pixel_delta_v)
 
-    ray.orig = position
+    ray.orig = cam.position
     ray.dir = pixel_sample - ray.orig
     return
 }
