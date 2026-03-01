@@ -1,0 +1,52 @@
+{
+	"folders":
+	[
+		{
+			"path": ".",
+		},
+	],
+	"build_systems":
+	[
+		{
+			"name": "Build DLL or Shared",
+			"working_dir": "$project_path",
+			// This makes sublime able to jump to build errors.
+			"file_regex": "^(.+)\\(([0-9]+):([0-9]+)\\) (.+)$",
+			
+			"windows": {
+				"shell_cmd": "scripts/build_dll.bat",
+			},
+			"osx": {
+				"shell_cmd": "./build_hot_reload.sh run",
+			},
+			"linux":{ 
+				"shell_cmd": "./scripts/build_dll.sh",
+			},
+		},
+		{
+			"name": "Build Hot Reload Wrapper",
+			"working_dir": "$project_path",
+			"file_regex": "^(.+)\\(([0-9]+):([0-9]+)\\) (.+)$",
+			
+			"windows": {
+				"shell_cmd": "scripts/build_hot_reload.bat run",
+			},
+			"osx": {
+				"shell_cmd": "./scripts/build_hot_reload_wrapper.sh run",
+			},
+			"linux":{ 
+				"shell_cmd": "./scripts/build_hot_reload_wrapper.sh",
+			},
+		}
+	],
+	"settings":
+	{
+		"LSP":
+		{
+			"odin":
+			{
+				"enabled": true,
+			},
+		},
+	},
+}
