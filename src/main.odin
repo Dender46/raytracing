@@ -336,6 +336,10 @@ render_pass :: proc(begin, end, samples_count_left: i32) {
 
 @(export)
 game_shutdown :: proc() {
+    for t in state.threads {
+        thread.terminate(t, 0)
+        thread.destroy(t)
+    }
     rl.UnloadTexture(state.screen_tex.texture)
     if rl.IsRenderTextureValid(state.screen_tex) { rl.UnloadRenderTexture(state.screen_tex) }
     if rl.IsRenderTextureValid(state.rt_tex)     { rl.UnloadRenderTexture(state.rt_tex) }
@@ -344,10 +348,6 @@ game_shutdown :: proc() {
     delete_dynamic_array(state.hit_list)
     delete_dynamic_array(state.threads)
     delete_dynamic_array(state.threads_data)
-    for t in state.threads {
-        thread.terminate(t, 0)
-        thread.destroy(t)
-    }
 
     free(state)
 }
