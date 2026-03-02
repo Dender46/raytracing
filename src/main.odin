@@ -122,7 +122,6 @@ game_init :: proc() {
             begin = i * pixels_per_thread,
             end = i * pixels_per_thread + pixels_per_thread,
             samples_count_left = SAMPLES_PER_PIXEL,
-            cam = state.cam,
         })
         t.data = &state.threads_data[i]
 
@@ -261,28 +260,26 @@ game_update :: proc() -> bool {
         }
     }
 
-    camera_update(&state.cam)
-
     @(static) render_time: f32 = 0.0
     if state.request_rerender {
         render_time = 0.0
     }
     finished_threads_count := 0
-    for d, idx in state.threads_data {
-        if d.samples_count_left <= 0 {
+    for &d, idx in state.threads_data {
+        if sync.atomic_load(&d.samples_count_left) <= 0 {
             finished_threads_count += 1
         }
     }
     if finished_threads_count != len(state.threads_data) {
-        render_time += rl.GetFrameTime()
+        // render_time += rl.GetFrameTime()
+        render_time += 1.0
     }
 
     if state.request_rerender {
         // Notify threads to stop and reset their state and buffer region in order to rerender
-        for &tData in state.threads_data {
-            tData.cam = state.cam
-        }
         _ = sync.atomic_add(&state.rerender_gen, 1)
+        camera_update(&state.cam)
+
         sync.barrier_wait(&state.rerender_clean_start)
         sync.barrier_wait(&state.rerender_clean_end)
         rl.UpdateTexture(state.rt_tex.texture, raw_data(state.texture_buffer))
@@ -340,7 +337,7 @@ render_pass_threaded :: proc(t: ^thread.Thread) {
 
             data.samples_count_left = SAMPLES_PER_PIXEL
             // Do one pass and let main thread to render to screen to avoid tearing
-            render_pass(data.begin, data.end, data.samples_count_left, data.cam)
+            render_pass(data.begin, data.end, data.samples_count_left, state.cam)
             data.samples_count_left -= 1
             sync.barrier_wait(&state.rerender_clean_end)
             sync.barrier_wait(&state.rerender_signal)
@@ -348,8 +345,8 @@ render_pass_threaded :: proc(t: ^thread.Thread) {
         }
 
         if data.samples_count_left > 0 {
-            render_pass(data.begin, data.end, data.samples_count_left, data.cam)
-            data.samples_count_left -= 1
+            render_pass(data.begin, data.end, data.samples_count_left, state.cam)
+            sync.atomic_sub(&data.samples_count_left, 1)
         } else {
             time.sleep(time.Millisecond * 5)
         }

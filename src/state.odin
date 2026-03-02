@@ -42,5 +42,4 @@ ThreadData :: struct {
     begin: i32,
     end: i32,
     samples_count_left: i32,
-    cam: Camera,
 }
